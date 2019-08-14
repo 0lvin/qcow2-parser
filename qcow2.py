@@ -23,7 +23,9 @@ class Struct(object):
         fmt = byte_order + "".join(code for _, code in fields)
         self.struct = struct.Struct(fmt)
 
-    def unpack_from(self, f):
+    def unpack_from(self, f, offset=0):
+        # seek to from begin
+        f.seek(offset, 0)
         data = f.read(self.struct.size)
         values = self.struct.unpack(data)
         return {key: value for key, value in zip(self.keys, values)}
@@ -52,12 +54,28 @@ HEADER_V3 = Struct([
     ("header_length", "I"),
 ])
 
+L1_ENTRY_SIZE = 8 # 64 bit
+L1_ENTRY = Struct([
+    ("l1_entry", "Q"),
+])
+
 
 def parse(file):
-    info = HEADER_V2.unpack_from(file)
+    info = HEADER_V2.unpack_from(file, 0)
     if info["version"] == 3:
-        v3_info = HEADER_V3.unpack_from(file)
+        v3_info = HEADER_V3.unpack_from(file, 0)
         info.update(v3_info)
+    if info['l1_table_offset']:
+        pos = info['l1_table_offset']
+        l1 = []
+        while pos < info['l1_table_offset'] + info['l1_size'] * L1_ENTRY_SIZE:
+            l1_entry = L1_ENTRY.unpack_from(file, pos)
+            l1 += [{
+                "l2_table_offset": (l1_entry['l1_entry'] >> 8) & 0x7fffffffffffff,
+                "non_cow": (l1_entry['l1_entry'] >> 63),
+            }]
+            pos += L1_ENTRY_SIZE
+        info['l1'] = l1
     return info
 
 
@@ -65,6 +83,7 @@ if __name__ == "__main__":
     import sys
     import json
     filename = sys.argv[1]
-    with open(filename) as f:
+    with open(filename, "rb") as f:
         info = parse(f)
-        print json.dumps(info, indent=4, sort_keys=True)
+        print("qcow2 dump: {}"
+              .format(json.dumps(info, indent=4, sort_keys=True)))
