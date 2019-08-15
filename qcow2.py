@@ -59,21 +59,37 @@ L1_ENTRY = Struct([
     ("l1_entry", "Q"),
 ])
 
+L2_ENTRY_SIZE = 8 # 64 bit
+L2_ENTRY = Struct([
+    ("l2_entry", "Q"),
+])
+
 
 def parse(file):
     info = HEADER_V2.unpack_from(file, 0)
     if info["version"] == 3:
         v3_info = HEADER_V3.unpack_from(file, 0)
         info.update(v3_info)
+    if info["cluster_bits"] and info["size"]:
+        info["cluster_size"] = 1 << info["cluster_bits"];
+        info["clusters"] = info["size"] / info["cluster_size"];
     if info['l1_table_offset']:
         pos = info['l1_table_offset']
         l1 = []
         while pos < info['l1_table_offset'] + info['l1_size'] * L1_ENTRY_SIZE:
-            l1_entry = L1_ENTRY.unpack_from(file, pos)
-            l1 += [{
-                "l2_table_offset": (l1_entry['l1_entry'] >> 8) & 0x7fffffffffffff,
-                "non_cow": (l1_entry['l1_entry'] >> 63),
-            }]
+            l1_entry_packed = L1_ENTRY.unpack_from(file, pos)
+            l1_entry = {
+                "l2_table_offset": (l1_entry_packed['l1_entry'] >> 8) & 0x7fffffffffffff,
+                "non_cow": (l1_entry_packed['l1_entry'] >> 63),
+            }
+            if l1_entry["l2_table_offset"] and info["clusters"]:
+                l2 = []
+                l2_pos = l1_entry["l2_table_offset"]
+                while l2_pos < l1_entry["l2_table_offset"] + info["clusters"] * L2_ENTRY_SIZE:
+                    l2 += [L2_ENTRY.unpack_from(file, l2_pos)]
+                    l2_pos += L2_ENTRY_SIZE
+                l1_entry["l2?"] = l2
+            l1 += [l1_entry]
             pos += L1_ENTRY_SIZE
         info['l1'] = l1
     return info
